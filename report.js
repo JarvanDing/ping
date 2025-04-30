@@ -195,35 +195,163 @@ function createLatencyDistributionChart() {
     }
 }
 
-// 创建趋势图
-function createTrendCharts() {
-    // 延迟趋势
-    const latencyQuery = `
+// --- 新增分析功能 ---
+
+// 填充趋势分析IP选择下拉框
+function populateTrendIpFilter() {
+    const selectElement = document.getElementById('trendIpFilter');
+    if (!selectElement) return;
+
+    try {
+        const query = `SELECT DISTINCT ip FROM ping_results ORDER BY ip`;
+        const result = db.exec(query)[0];
+        if (result && result.values) {
+            result.values.forEach(row => {
+                const option = document.createElement('option');
+                option.value = row[0];
+                option.textContent = row[0];
+                selectElement.appendChild(option);
+            });
+        }
+    } catch (e) {
+        console.error("Error populating IP filter for trends:", e);
+    }
+}
+
+// 计算在线率
+function calculateUptime(successCount, totalCount) {
+    if (totalCount === 0) return 0;
+    return ((successCount / totalCount) * 100);
+}
+
+// 计算标准差 (抖动)
+function calculateStandardDeviation(values) {
+    const n = values.length;
+    if (n === 0) return 0;
+    const mean = values.reduce((a, b) => a + b, 0) / n;
+    const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+    return Math.sqrt(variance);
+}
+
+// 创建在线率图表
+function createUptimeChart() {
+    const query = `
         SELECT 
-            strftime('%Y-%m-%d', timestamp) as date, /* 使用strftime确保日期格式一致 */
-            AVG(avg_latency) as avg_latency
+            ip,
+            SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
+            COUNT(*) as total_count
         FROM ping_results
-        WHERE timestamp >= datetime('now', '-30 days') AND avg_latency IS NOT NULL
-        GROUP BY date
-        ORDER BY date
+        WHERE timestamp >= datetime('now', '-7 days')
+        GROUP BY ip
+        ORDER BY (SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) * 1.0 / COUNT(*)) DESC
     `;
-    
+
+    try {
+        const result = db.exec(query)[0];
+        if (result && result.values && result.values.length > 0) {
+            const ips = result.values.map(row => row[0]);
+            const uptimes = result.values.map(row => calculateUptime(row[1], row[2]).toFixed(1));
+
+            // 计算总体平均在线率
+            const totalSuccess = result.values.reduce((sum, row) => sum + row[1], 0);
+            const totalCount = result.values.reduce((sum, row) => sum + row[2], 0);
+            const overallUptime = calculateUptime(totalSuccess, totalCount).toFixed(1);
+            document.getElementById('overallUptime').textContent = `${overallUptime}%`;
+
+            const ctx = document.getElementById('uptimeChart').getContext('2d');
+            if (charts.uptime) charts.uptime.destroy();
+            charts.uptime = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ips,
+                    datasets: [{
+                        label: '在线率 (%)',
+                        data: uptimes,
+                        backgroundColor: uptimes.map(u => u >= 99.9 ? 'rgba(40, 167, 69, 0.7)' : u >= 99 ? 'rgba(255, 193, 7, 0.7)' : 'rgba(220, 53, 69, 0.7)'), // 根据在线率显示不同颜色
+                        borderColor: uptimes.map(u => u >= 99.9 ? 'rgba(40, 167, 69, 1)' : u >= 99 ? 'rgba(255, 193, 7, 1)' : 'rgba(220, 53, 69, 1)'),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y', // 将条形图改为水平方向，方便查看IP
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: '在线率 (%)'
+                            }
+                        },
+                        y: {
+                            ticks: {
+                                autoSkip: false // 防止IP标签被跳过
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        } else {
+            console.warn("No data for uptime chart.");
+            document.getElementById('overallUptime').textContent = 'N/A';
+            // 可以显示提示信息
+        }
+    } catch (e) {
+        console.error("Error creating uptime chart:", e);
+         document.getElementById('overallUptime').textContent = '错误';
+    }
+}
+
+// 创建抖动对比图表
+function createJitterComparisonChart() {
+    // 获取所有 IP 的延迟数据
+    const latencyQuery = `
+        SELECT ip, avg_latency
+        FROM ping_results
+        WHERE timestamp >= datetime('now', '-7 days') 
+        AND avg_latency IS NOT NULL AND success = 1
+    `;
+
     try {
         const latencyResult = db.exec(latencyQuery)[0];
         if (latencyResult && latencyResult.values && latencyResult.values.length > 0) {
-            const ctx = document.getElementById('latencyTrendChart').getContext('2d');
-            if (charts.latencyTrend) charts.latencyTrend.destroy();
-            charts.latencyTrend = new Chart(ctx, {
-                type: 'line',
+            // 按 IP 分组延迟数据
+            const latenciesByIp = latencyResult.values.reduce((acc, [ip, latency]) => {
+                if (!acc[ip]) {
+                    acc[ip] = [];
+                }
+                acc[ip].push(latency);
+                return acc;
+            }, {});
+
+            // 计算每个 IP 的抖动（标准差）
+            const jitterData = Object.entries(latenciesByIp).map(([ip, latencies]) => ({
+                ip: ip,
+                jitter: calculateStandardDeviation(latencies).toFixed(2) // 计算标准差
+            }));
+
+            // 按抖动值排序
+            jitterData.sort((a, b) => a.jitter - b.jitter);
+
+            const ctx = document.getElementById('jitterComparisonChart').getContext('2d');
+            if (charts.jitterComparison) charts.jitterComparison.destroy();
+            charts.jitterComparison = new Chart(ctx, {
+                type: 'bar',
                 data: {
-                    labels: latencyResult.values.map(row => row[0]),
+                    labels: jitterData.map(d => d.ip),
                     datasets: [{
-                        label: '平均延迟',
-                        data: latencyResult.values.map(row => Math.round(row[1] || 0)),
-                        borderColor: 'rgba(54, 162, 235, 1)',
-                        backgroundColor: 'rgba(54, 162, 235, 0.2)', // 添加背景色
-                        tension: 0.1,
-                        fill: true // 填充区域
+                        label: '延迟抖动 (ms)',
+                        data: jitterData.map(d => d.jitter),
+                        backgroundColor: 'rgba(108, 117, 125, 0.6)', // 中性灰色
+                        borderColor: 'rgba(108, 117, 125, 1)',
+                        borderWidth: 1
                     }]
                 },
                 options: {
@@ -231,7 +359,95 @@ function createTrendCharts() {
                     maintainAspectRatio: false,
                     scales: {
                         y: {
-                            beginAtZero: false, // Y轴不一定从0开始
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '抖动 (延迟标准差 - ms)'
+                            }
+                        },
+                        x: {
+                             title: {
+                                display: true,
+                                text: 'IP 地址'
+                            }
+                        }
+                    },
+                     plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+
+        } else {
+            console.warn("No latency data found for jitter calculation.");
+            // 在图表区域显示提示
+             const canvas = document.getElementById('jitterComparisonChart');
+             const ctx = canvas.getContext('2d');
+             ctx.clearRect(0, 0, canvas.width, canvas.height);
+             ctx.textAlign = 'center';
+             ctx.fillText('没有足够的延迟数据来计算抖动', canvas.width / 2, canvas.height / 2);
+        }
+    } catch (e) {
+        console.error("Error creating jitter comparison chart:", e);
+    }
+}
+
+// --- 结束 新增分析功能 ---
+
+// 创建趋势图 (修改)
+function createTrendCharts(selectedIp = 'all') { // 接收 selectedIp 参数，默认为 'all'
+    let latencyWhereClause = "avg_latency IS NOT NULL";
+    let packetLossWhereClause = "1=1"; // Base condition
+    let titleSuffix = '总体';
+
+    if (selectedIp && selectedIp !== 'all') {
+        latencyWhereClause += ` AND ip = '${selectedIp.replace(/'/g, "''")}'`; // Add IP filter and escape single quotes
+        packetLossWhereClause += ` AND ip = '${selectedIp.replace(/'/g, "''")}'`;
+        titleSuffix = selectedIp;
+    }
+
+    // 更新图表标题
+    document.getElementById('latencyTrendHeader').textContent = `延迟趋势 (近30天 - ${titleSuffix})`;
+    document.getElementById('packetLossTrendHeader').textContent = `丢包率趋势 (近30天 - ${titleSuffix})`;
+
+    // 延迟趋势
+    const latencyQuery = `
+        SELECT 
+            strftime('%Y-%m-%d', timestamp) as date,
+            AVG(avg_latency) as avg_latency
+        FROM ping_results
+        WHERE timestamp >= datetime('now', '-30 days') AND ${latencyWhereClause}
+        GROUP BY date
+        ORDER BY date
+    `;
+    
+    try {
+        const latencyResult = db.exec(latencyQuery)[0];
+        const latencyCtx = document.getElementById('latencyTrendChart').getContext('2d');
+        if (charts.latencyTrend) charts.latencyTrend.destroy(); // 销毁旧图表
+
+        if (latencyResult && latencyResult.values && latencyResult.values.length > 0) {
+            charts.latencyTrend = new Chart(latencyCtx, {
+                type: 'line',
+                data: {
+                    labels: latencyResult.values.map(row => row[0]),
+                    datasets: [{
+                        label: `平均延迟 (${titleSuffix})`,
+                        data: latencyResult.values.map(row => Math.round(row[1] || 0)),
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        tension: 0.1,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
                             title: {
                                 display: true,
                                 text: '延迟 (ms)'
@@ -247,39 +463,44 @@ function createTrendCharts() {
                 }
             });
         } else {
-             console.warn("No data for latency trend chart.");
+             console.warn(`No data for latency trend chart (${titleSuffix}).`);
+             // 清空画布并显示提示
+             latencyCtx.clearRect(0, 0, latencyCtx.canvas.width, latencyCtx.canvas.height);
+             latencyCtx.textAlign = 'center';
+             latencyCtx.fillText('没有找到符合条件的延迟趋势数据', latencyCtx.canvas.width / 2, latencyCtx.canvas.height / 2);
         }
     } catch (e) {
-        console.error("Error creating latency trend chart:", e);
+        console.error(`Error creating latency trend chart (${titleSuffix}):`, e);
     }
     
     // 丢包率趋势
     const packetLossQuery = `
         SELECT 
-            strftime('%Y-%m-%d', timestamp) as date, /* 使用strftime确保日期格式一致 */
+            strftime('%Y-%m-%d', timestamp) as date,
             AVG(CASE WHEN success = 0 THEN 1 ELSE 0 END) * 100 as packet_loss
         FROM ping_results
-        WHERE timestamp >= datetime('now', '-30 days')
+        WHERE timestamp >= datetime('now', '-30 days') AND ${packetLossWhereClause}
         GROUP BY date
         ORDER BY date
     `;
     
     try {
         const packetLossResult = db.exec(packetLossQuery)[0];
+        const packetLossCtx = document.getElementById('packetLossTrendChart').getContext('2d');
+         if (charts.packetLossTrend) charts.packetLossTrend.destroy(); // 销毁旧图表
+
         if (packetLossResult && packetLossResult.values && packetLossResult.values.length > 0) {
-            const ctx = document.getElementById('packetLossTrendChart').getContext('2d');
-            if (charts.packetLossTrend) charts.packetLossTrend.destroy();
-            charts.packetLossTrend = new Chart(ctx, {
+            charts.packetLossTrend = new Chart(packetLossCtx, {
                 type: 'line',
                 data: {
                     labels: packetLossResult.values.map(row => row[0]),
                     datasets: [{
-                        label: '丢包率',
+                        label: `丢包率 (${titleSuffix})`,
                         data: packetLossResult.values.map(row => (row[1] || 0).toFixed(1)),
                         borderColor: 'rgba(255, 99, 132, 1)',
-                        backgroundColor: 'rgba(255, 99, 132, 0.2)', // 添加背景色
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
                         tension: 0.1,
-                        fill: true // 填充区域
+                        fill: true
                     }]
                 },
                 options: {
@@ -288,7 +509,7 @@ function createTrendCharts() {
                     scales: {
                         y: {
                             beginAtZero: true,
-                            max: 100, // Y轴最大值100%
+                            max: 100,
                             title: {
                                 display: true,
                                 text: '丢包率 (%)'
@@ -304,10 +525,14 @@ function createTrendCharts() {
                 }
             });
         } else {
-             console.warn("No data for packet loss trend chart.");
+             console.warn(`No data for packet loss trend chart (${titleSuffix}).`);
+             // 清空画布并显示提示
+             packetLossCtx.clearRect(0, 0, packetLossCtx.canvas.width, packetLossCtx.canvas.height);
+             packetLossCtx.textAlign = 'center';
+             packetLossCtx.fillText('没有找到符合条件的丢包率趋势数据', packetLossCtx.canvas.width / 2, packetLossCtx.canvas.height / 2);
         }
      } catch (e) {
-        console.error("Error creating packet loss trend chart:", e);
+        console.error(`Error creating packet loss trend chart (${titleSuffix}):`, e);
     }
 }
 
@@ -551,7 +776,7 @@ function createComparisonCharts() {
 async function initPage() {
     try {
         updateLoadingProgress(10, '正在初始化SQL.js...');
-        await initializeSqlJs(); // 使用重命名后的函数
+        await initializeSqlJs();
         
         updateLoadingProgress(30, '正在加载数据库...');
         const success = await loadDatabase();
@@ -559,29 +784,39 @@ async function initPage() {
             throw new Error('加载数据库失败');
         }
         
-        // 隐藏加载指示器，显示内容
         document.getElementById('loadingIndicator').style.display = 'none';
-        document.getElementById('reportTabsContent').style.display = 'block'; // 确保内容可见
+        document.getElementById('reportTabsContent').style.display = 'block';
 
         updateLoadingProgress(50, '正在分析数据...');
         updateOverview();
         
-        updateLoadingProgress(60, '正在生成图表...');
+        updateLoadingProgress(60, '正在生成图表和控件...'); // 更新提示文本
+        // 填充下拉框
+        populateTrendIpFilter(); 
+
+        // 创建图表 (初始加载总体趋势)
         createLatencyDistributionChart();
-        createTrendCharts();
+        createTrendCharts(); // 初始调用，不带参数，显示总体
         createStabilityHeatmap();
         updateAnomalyTable();
         createComparisonCharts();
-        
-        // updateLoadingProgress(100, '加载完成'); // 加载完成不再需要进度条
+        createUptimeChart();
+        createJitterComparisonChart();
+
+        // 添加事件监听器
+        const trendIpFilter = document.getElementById('trendIpFilter');
+        if (trendIpFilter) {
+            trendIpFilter.addEventListener('change', (event) => {
+                createTrendCharts(event.target.value); // 选择变化时重新生成趋势图
+            });
+        }
         
     } catch (err) {
         console.error('初始化页面失败:', err);
         const loadingIndicator = document.getElementById('loadingIndicator');
         loadingIndicator.innerHTML = `<div class="alert alert-danger" role="alert">加载失败: ${err.message}</div>`;
-        // 确保错误信息可见
         loadingIndicator.style.display = 'block'; 
-        document.getElementById('reportTabsContent').style.display = 'none'; // 隐藏内容区域
+        document.getElementById('reportTabsContent').style.display = 'none';
     }
 }
 
