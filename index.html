@@ -76,117 +76,144 @@
         .pagination {
             justify-content: center;
         }
+        .nav-tabs {
+            margin-bottom: 20px;
+        }
+        .nav-tabs .nav-link {
+            color: #666;
+        }
+        .nav-tabs .nav-link.active {
+            color: #4a89dc;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
     <div class="container-fluid">
         <h1>Ping监控数据</h1>
-        <p id="lastUpdate" class="text-center">加载中...</p>
         
-        <!-- 数据库加载进度 -->
-        <div id="loadingIndicator" class="card mb-4">
-            <div class="card-body">
-                <h5>正在加载数据库...</h5>
-                <div class="progress">
-                    <div id="loadingProgress" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+        <!-- 导航标签 -->
+        <ul class="nav nav-tabs" id="mainTabs" role="tablist">
+            <li class="nav-item">
+                <a class="nav-link active" id="monitor-tab" data-bs-toggle="tab" href="#monitor" role="tab">实时监控</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="report-tab" href="report.html" role="tab">数据分析报表</a>
+            </li>
+        </ul>
+
+        <!-- 标签内容 -->
+        <div class="tab-content" id="mainTabsContent">
+            <!-- 实时监控标签页 -->
+            <div class="tab-pane fade show active" id="monitor" role="tabpanel">
+                <p id="lastUpdate" class="text-center">加载中...</p>
+                
+                <!-- 数据库加载进度 -->
+                <div id="loadingIndicator" class="card mb-4">
+                    <div class="card-body">
+                        <h5>正在加载数据库...</h5>
+                        <div class="progress">
+                            <div id="loadingProgress" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <p id="loadingText" class="mt-2">正在准备加载...</p>
+                    </div>
                 </div>
-                <p id="loadingText" class="mt-2">正在准备加载...</p>
-            </div>
-        </div>
 
-        <!-- 筛选表单 -->
-        <div class="card mb-4">
-            <div class="card-header">数据筛选</div>
-            <div class="card-body">
-                <form id="filterForm" class="row g-3">
-                    <div class="col-md-3">
-                        <label for="startDate" class="form-label">开始日期</label>
-                        <input type="date" class="form-control" id="startDate" name="startDate">
+                <!-- 筛选表单 -->
+                <div class="card mb-4">
+                    <div class="card-header">数据筛选</div>
+                    <div class="card-body">
+                        <form id="filterForm" class="row g-3">
+                            <div class="col-md-3">
+                                <label for="startDate" class="form-label">开始日期</label>
+                                <input type="date" class="form-control" id="startDate" name="startDate">
+                            </div>
+                            <div class="col-md-3">
+                                <label for="endDate" class="form-label">结束日期</label>
+                                <input type="date" class="form-control" id="endDate" name="endDate">
+                            </div>
+                            <div class="col-md-3">
+                                <label for="ipFilter" class="form-label">IP筛选</label>
+                                <select class="form-select" id="ipFilter" name="ipFilter">
+                                    <option value="">全部IP</option>
+                                    <!-- IP选项将通过JavaScript动态生成 -->
+                                </select>
+                            </div>
+                            <div class="col-md-3 d-flex align-items-end">
+                                <button type="submit" class="btn btn-primary me-2">筛选</button>
+                                <button type="button" id="resetFilter" class="btn btn-secondary">重置</button>
+                            </div>
+                        </form>
                     </div>
-                    <div class="col-md-3">
-                        <label for="endDate" class="form-label">结束日期</label>
-                        <input type="date" class="form-control" id="endDate" name="endDate">
-                    </div>
-                    <div class="col-md-3">
-                        <label for="ipFilter" class="form-label">IP筛选</label>
-                        <select class="form-select" id="ipFilter" name="ipFilter">
-                            <option value="">全部IP</option>
-                            <!-- IP选项将通过JavaScript动态生成 -->
-                        </select>
-                    </div>
-                    <div class="col-md-3 d-flex align-items-end">
-                        <button type="submit" class="btn btn-primary me-2">筛选</button>
-                        <button type="button" id="resetFilter" class="btn btn-secondary">重置</button>
-                    </div>
-                </form>
-            </div>
-        </div>
+                </div>
 
-        <!-- IP概览 -->
-        <div class="card mb-4">
-            <div class="card-header">IP状态概览</div>
-            <div class="card-body">
-                <div id="summaryContainer" class="row">
-                    <!-- 摘要卡片将通过JavaScript生成 -->
-                    <div class="spinner-container">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
+                <!-- IP概览 -->
+                <div class="card mb-4">
+                    <div class="card-header">IP状态概览</div>
+                    <div class="card-body">
+                        <div id="summaryContainer" class="row">
+                            <!-- 摘要卡片将通过JavaScript生成 -->
+                            <div class="spinner-container">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- 详细数据表 -->
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span>详细测试结果</span>
-                <div>
-                    <select id="pageSize" class="form-select form-select-sm" style="width: auto; display: inline-block;">
-                        <option value="10">10条/页</option>
-                        <option value="25" selected>25条/页</option>
-                        <option value="50">50条/页</option>
-                        <option value="100">100条/页</option>
-                    </select>
-                </div>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-striped table-hover">
-                        <thead>
-                            <tr>
-                                <th>IP地址</th>
-                                <th>地区</th>
-                                <th>测试时间</th>
-                                <th>状态</th>
-                                <th>平均延迟</th>
-                                <th>最小延迟</th>
-                                <th>最大延迟</th>
-                                <th>丢包率</th>
-                                <th>详细数据</th>
-                            </tr>
-                        </thead>
-                        <tbody id="resultTable">
-                            <!-- 数据行将通过JavaScript生成 -->
-                            <tr>
-                                <td colspan="9" class="text-center">
-                                    <div class="spinner-border text-primary" role="status">
-                                        <span class="visually-hidden">Loading...</span>
-                                    </div>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                
-                <!-- 分页控件 -->
-                <nav aria-label="Page navigation">
-                    <ul id="pagination" class="pagination">
-                        <!-- 分页链接将通过JavaScript生成 -->
-                    </ul>
-                </nav>
-                <div id="pageInfo" class="text-center mt-2">
-                    <!-- 页码信息将通过JavaScript生成 -->
+                <!-- 详细数据表 -->
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>详细测试结果</span>
+                        <div>
+                            <select id="pageSize" class="form-select form-select-sm" style="width: auto; display: inline-block;">
+                                <option value="10">10条/页</option>
+                                <option value="25" selected>25条/页</option>
+                                <option value="50">50条/页</option>
+                                <option value="100">100条/页</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>IP地址</th>
+                                        <th>地区</th>
+                                        <th>测试时间</th>
+                                        <th>状态</th>
+                                        <th>平均延迟</th>
+                                        <th>最小延迟</th>
+                                        <th>最大延迟</th>
+                                        <th>丢包率</th>
+                                        <th>详细数据</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="resultTable">
+                                    <!-- 数据行将通过JavaScript生成 -->
+                                    <tr>
+                                        <td colspan="9" class="text-center">
+                                            <div class="spinner-border text-primary" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- 分页控件 -->
+                        <nav aria-label="Page navigation">
+                            <ul id="pagination" class="pagination">
+                                <!-- 分页链接将通过JavaScript生成 -->
+                            </ul>
+                        </nav>
+                        <div id="pageInfo" class="text-center mt-2">
+                            <!-- 页码信息将通过JavaScript生成 -->
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
