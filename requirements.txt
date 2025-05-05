@@ -1,6 +1,7 @@
 # 基础依赖
 python-dateutil>=2.8.2  # 用于日期时间处理
 argparse>=1.4.0        # 命令行参数解析（Python 3.2+已内置，但为了兼容性列出）
+requests
 
 # 开发依赖
 pytest>=7.0.0          # 用于测试

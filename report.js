@@ -772,51 +772,201 @@ function createComparisonCharts() {
     */
 }
 
-// 初始化页面
+// --- 路由追踪数据显示函数 (修改为从 DB 加载) ---
+async function loadAndDisplayTracerouteFromDB() {
+    const resultsContainer = document.getElementById('tracerouteResultsContainer');
+    const lastUpdatedElement = document.getElementById('lastUpdated');
+    if (!resultsContainer || !lastUpdatedElement) {
+        console.warn("Traceroute 相关元素未找到，无法加载数据。");
+        return;
+    }
+    
+    if (!db) {
+        console.error("数据库尚未加载，无法查询 Traceroute 数据。");
+        resultsContainer.innerHTML = `<div class="col-12"><p class="text-center text-danger">数据库加载失败，无法显示路由追踪数据。</p></div>`;
+        lastUpdatedElement.textContent = '路由追踪数据加载失败';
+        return;
+    }
+
+    resultsContainer.innerHTML = '<div class="col-12 text-center"><div class="spinner-container"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div></div>';
+    lastUpdatedElement.textContent = '正在从数据库加载路由追踪数据...';
+
+    try {
+        // SQL 查询：获取每个 target_ip 的最新记录
+        // 使用子查询或 ROW_NUMBER() 来获取每个分组的最新记录（取决于 sql.js 支持的 SQLite 版本）
+        // 这里使用子查询的方式，更通用
+        const query = `
+            SELECT t1.target_ip, t1.timestamp, t1.hops_json, t1.error
+            FROM traceroute_results t1
+            INNER JOIN (
+                SELECT target_ip, MAX(timestamp) as max_ts
+                FROM traceroute_results
+                GROUP BY target_ip
+            ) t2 ON t1.target_ip = t2.target_ip AND t1.timestamp = t2.max_ts
+            ORDER BY t1.target_ip;
+        `;
+        
+        const results = db.exec(query);
+        
+        resultsContainer.innerHTML = ''; // 清空加载指示器
+
+        if (results.length > 0 && results[0].values && results[0].values.length > 0) {
+            // 假设数据最后更新时间是最后一条记录的时间戳
+            const lastTimestamp = results[0].values[results[0].values.length - 1][1]; 
+            lastUpdatedElement.textContent = `路由追踪数据基于数据库记录 (最新记录时间: ${lastTimestamp})`;
+
+            const dataToDisplay = results[0].values.map(row => {
+                let hops = [];
+                if (row[2]) { // hops_json
+                    try {
+                        hops = JSON.parse(row[2]);
+                    } catch (e) {
+                        console.warn(`无法解析 IP ${row[0]} 的 hops_json 数据: ${row[2]}`, e);
+                        hops = []; // 出错时设为空列表
+                    }
+                }
+                return {
+                    target_ip: row[0],
+                    timestamp: row[1],
+                    hops: hops,
+                    error: row[3]
+                };
+            });
+            displayTracerouteResults(dataToDisplay); // 调用显示函数
+        } else {
+            lastUpdatedElement.textContent = '数据库中未找到有效的路由追踪数据。';
+            resultsContainer.innerHTML = '<div class="col-12"><p class="text-center text-muted">数据库中未找到有效的路由追踪数据。</p></div>';
+        }
+
+    } catch (error) {
+        console.error('从数据库加载或处理路由追踪数据失败:', error);
+        resultsContainer.innerHTML = `<div class="col-12"><p class="text-center text-danger">加载路由追踪数据失败: ${error.message}</p></div>`;
+        lastUpdatedElement.textContent = '路由追踪数据加载失败';
+    }
+}
+
+// 修改显示函数，增加过滤星号行的逻辑
+function displayTracerouteResults(results) {
+    const resultsContainer = document.getElementById('tracerouteResultsContainer');
+    results.forEach(result => {
+        const col = document.createElement('div');
+        col.className = 'col-md-12 mb-4'; 
+        const card = document.createElement('div');
+        card.className = 'card h-100';
+        const cardHeader = document.createElement('div');
+        cardHeader.className = 'card-header d-flex justify-content-between align-items-center'; 
+        cardHeader.innerHTML = `
+            <span>目标 IP: <strong>${result.target_ip}</strong></span>
+            <small>时间: ${result.timestamp}</small>
+        `;
+        const cardBody = document.createElement('div');
+        cardBody.className = 'card-body p-0';
+
+        if (result.error) {
+            cardBody.style.padding = '1.5rem';
+            cardBody.innerHTML = `<p class="error-text">追踪过程中发生错误: ${result.error}</p>`;
+        } else if (result.hops && result.hops.length > 0) {
+            const tableContainer = document.createElement('div');
+            tableContainer.className = 'table-responsive';
+            const table = document.createElement('table');
+            table.className = 'table table-sm table-striped table-hover mb-0';
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr>
+                    <th style="width: 5%;">跳数</th>
+                    <th style="width: 35%;">IP 地址</th>
+                    <th>地区</th>
+                </tr>
+            `;
+            const tbody = document.createElement('tbody');
+            let validHopCount = 0; // 记录有效跳数
+            result.hops.forEach(hop => {
+                // 检查 IP 是否为星号，如果不是则显示该行
+                if (hop.ip && hop.ip !== '*') { 
+                    const tr = document.createElement('tr');
+                    const ipStr = hop.ip;
+                    const locationStr = hop.location || '查询中...';
+                    tr.innerHTML = `
+                        <td>${hop.hop}</td>
+                        <td>${ipStr}</td>
+                        <td>${locationStr}</td>
+                    `;
+                    tbody.appendChild(tr);
+                    validHopCount++;
+                }
+            });
+            
+            if(validHopCount > 0){
+                table.appendChild(thead);
+                table.appendChild(tbody);
+                tableContainer.appendChild(table);
+                cardBody.appendChild(tableContainer);
+            } else {
+                 // 如果所有跳都是星号或没有有效跳
+                 cardBody.style.padding = '1.5rem';
+                 cardBody.innerHTML = '<p class="text-muted">未能获取到有效的路由节点信息（可能全部超时）。</p>';
+            }
+
+        } else {
+             cardBody.style.padding = '1.5rem';
+            cardBody.innerHTML = '<p class="text-muted">未能获取到路由信息。</p>';
+        }
+        card.appendChild(cardHeader);
+        card.appendChild(cardBody);
+        col.appendChild(card);
+        resultsContainer.appendChild(col);
+    });
+}
+// --- 结束 路由追踪数据显示函数 ---
+
+// 初始化页面 (修改调用)
 async function initPage() {
     try {
         updateLoadingProgress(10, '正在初始化SQL.js...');
         await initializeSqlJs();
         
-        updateLoadingProgress(30, '正在加载数据库...');
-        const success = await loadDatabase();
-        if (!success) {
-            throw new Error('加载数据库失败');
+        updateLoadingProgress(30, '正在加载 Ping 数据库...');
+        const success = await loadDatabase(); // loadDatabase 会设置全局 db 变量
+        if (!success || !db) { // 检查 db 是否成功加载
+            throw new Error('加载 Ping 数据库失败');
         }
         
         document.getElementById('loadingIndicator').style.display = 'none';
         document.getElementById('reportTabsContent').style.display = 'block';
 
-        updateLoadingProgress(50, '正在分析数据...');
+        updateLoadingProgress(50, '正在分析 Ping 数据...');
         updateOverview();
         
-        updateLoadingProgress(60, '正在生成图表和控件...'); // 更新提示文本
-        // 填充下拉框
+        updateLoadingProgress(60, '正在生成 Ping 分析图表和控件...');
         populateTrendIpFilter(); 
-
-        // 创建图表 (初始加载总体趋势)
         createLatencyDistributionChart();
-        createTrendCharts(); // 初始调用，不带参数，显示总体
+        createTrendCharts(); 
         createStabilityHeatmap();
         updateAnomalyTable();
         createComparisonCharts();
         createUptimeChart();
         createJitterComparisonChart();
 
-        // 添加事件监听器
         const trendIpFilter = document.getElementById('trendIpFilter');
         if (trendIpFilter) {
             trendIpFilter.addEventListener('change', (event) => {
-                createTrendCharts(event.target.value); // 选择变化时重新生成趋势图
+                createTrendCharts(event.target.value); 
             });
         }
+        
+        // --- 从数据库加载并显示路由追踪数据 ---
+        updateLoadingProgress(85, '正在加载路由追踪数据...');
+        // 直接调用新的函数，它会使用全局 db 对象
+        await loadAndDisplayTracerouteFromDB(); 
+        updateLoadingProgress(100, '报表加载完成。');
         
     } catch (err) {
         console.error('初始化页面失败:', err);
         const loadingIndicator = document.getElementById('loadingIndicator');
-        loadingIndicator.innerHTML = `<div class="alert alert-danger" role="alert">加载失败: ${err.message}</div>`;
+        loadingIndicator.innerHTML = `<div class="alert alert-danger" role="alert">页面加载失败: ${err.message}. <br>请确保 ping_data.db 文件存在且有效。</div>`;
         loadingIndicator.style.display = 'block'; 
-        document.getElementById('reportTabsContent').style.display = 'none';
+        const contentArea = document.getElementById('reportTabsContent');
+        if(contentArea) contentArea.style.display = 'none'; 
     }
 }
 
